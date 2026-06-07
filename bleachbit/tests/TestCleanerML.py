@@ -1,0 +1,249 @@
+# vim: ts=4:sw=4:expandtab
+
+# BleachBit
+# Copyright (C) 2008-2025 Andrew Ziem
+# https://www.bleachbit.org
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+
+"""
+Test cases for module CleanerML
+"""
+
+# standard imports
+import os
+import shutil
+import sys
+from unittest import mock
+
+# first party imports
+import bleachbit
+from tests import common
+from bleachbit import Cleaner
+from bleachbit.CleanerML import (
+    CleanerML,
+    boolstr_to_bool,
+    create_pot,
+    default_vars,
+    list_cleanerml_files,
+    load_cleaners,
+    pot_fragment)
+
+
+class CleanerMLTestCase(common.BleachbitTestCase):
+    """Test cases for CleanerML"""
+
+    def run_all(self, xmlcleaner, really_delete):
+        """Helper function to execute all options in a cleaner"""
+        for (option_id, __name) in xmlcleaner.cleaner.get_options():
+            for cmd in xmlcleaner.cleaner.get_commands(option_id):
+                for result in cmd.execute(really_delete):
+                    common.validate_result(self, result, really_delete)
+
+    def _get_xmlcleaner(self):
+        """Helper for CleanerML*()"""
+        xmlcleaner = CleanerML("doc/example_cleaner.xml")
+        self.assertIsInstance(xmlcleaner, CleanerML)
+        self.assertIsInstance(xmlcleaner.cleaner, Cleaner.Cleaner)
+        return xmlcleaner
+
+    def test_CleanerML(self):
+        """Unit test for class CleanerML"""
+        xmlcleaner = self._get_xmlcleaner()
+        # preview
+        self.run_all(xmlcleaner, False)
+
+    @common.skipUnlessDestructive
+    def test_CleanerML_destructive(self):
+        """Unit test the destructive parts of class CleanerML"""
+        xmlcleaner = self._get_xmlcleaner()
+        # really delete
+        self.run_all(xmlcleaner, True)
+
+    def test_boolstr_to_bool(self):
+        """Unit test for boolstr_to_bool()"""
+        tests = [('True', True),
+                 ('False', False)]
+
+        for (arg, output) in tests:
+            self.assertEqual(boolstr_to_bool(arg), output)
+            self.assertEqual(boolstr_to_bool(arg.lower()), output)
+            self.assertEqual(boolstr_to_bool(arg.upper()), output)
+
+    def test_create_pot(self):
+        """Unit test for create_pot()"""
+        os.chdir('po')
+        try:
+            create_pot()
+        finally:
+            os.chdir('..')
+
+    def test_default_vars_windows_system(self):
+        """Unit test WindowsSystem in default_vars()"""
+        env = {
+            'WinDir': r'C:\Windows',
+            'ProgramFiles': r'C:\Program Files (x86)',
+            'ProgramW6432': r'C:\Program Files',
+        }
+        with mock.patch('bleachbit.CleanerML.os.name', 'nt'), \
+                mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch('bleachbit.Windows.ARCH_BITS', 32):
+            variables = default_vars()
+        self.assertEqual(
+            [r'C:\Windows\Sysnative', r'C:\Windows\SysWOW64'],
+            variables['WindowsSystem'])
+
+    def test_list_cleanerml_files(self):
+        """Unit test for list_cleanerml_files()"""
+        for pathname in list_cleanerml_files():
+            self.assertExists(pathname)
+
+    def test_load_cleaners(self):
+        """Unit test for load_cleaners()"""
+        # normal
+        list(load_cleaners())
+
+        # should catch exception with invalid XML
+        pcd = bleachbit.personal_cleaners_dir
+        bleachbit.personal_cleaners_dir = self.mkdtemp(
+            prefix='bleachbit-cleanerml-load')
+        self.write_file(os.path.join(bleachbit.personal_cleaners_dir, 'invalid.xml'),
+                        contents=b'<xml><broken>')
+        list(load_cleaners())
+        shutil.rmtree(bleachbit.personal_cleaners_dir)
+        bleachbit.personal_cleaners_dir = pcd
+
+    def test_load_cleaners_invalid_utf8(self):
+        """Unit test for load_cleaners() with invalid UTF-8 encoding"""
+        pcd = bleachbit.personal_cleaners_dir
+        bleachbit.personal_cleaners_dir = self.mkdtemp(
+            prefix='bleachbit-cleanerml-utf8')
+        self.write_file(os.path.join(bleachbit.personal_cleaners_dir, 'broken_encoding.xml'),
+                        contents=b'<cleaner id="poison">\n\xff\xfe\xfd Broken\n')
+        list(load_cleaners())
+        shutil.rmtree(bleachbit.personal_cleaners_dir)
+        bleachbit.personal_cleaners_dir = pcd
+
+    def test_nvalid_utf8(self):
+        """Test CleanerML() with invalid UTF-8 encoding
+
+        It should fail gracefully.
+        """
+        fn = os.path.join(self.mkdtemp(prefix='bleachbit-cleanerml-utf8'),
+                          'broken.xml')
+        self.write_file(fn, contents=b'<cleaner id="poison">\n\xff\xfe\xfd\n')
+        xmlcleaner = CleanerML(fn)
+        self.assertIsInstance(xmlcleaner, CleanerML)
+        self.assertFalse(xmlcleaner.cleaner.is_usable())
+
+    def test_utf8_non_ascii(self):
+        """Test CleanerML() with UTF-8 non-ASCII text
+
+        It should load successfully.
+        """
+        xml_str = """<?xml version="1.0" encoding="UTF-8"?>
+<cleaner id="test_utf8">
+    <label>Test</label>
+    <!-- 中文注释 -->
+    <option id="opt">
+        <label>测试标签</label>
+        <description>测试描述</description>
+        <action search="file" command="delete" path="C:\\中文路径\\file.txt"/>
+    </option>
+</cleaner>
+"""
+        fn = os.path.join(self.mkdtemp(prefix='bleachbit-cleanerml-utf8'),
+                          'utf8.xml')
+        self.write_file(fn, contents=xml_str.encode('utf-8'))
+        xmlcleaner = CleanerML(fn)
+        self.assertIsInstance(xmlcleaner, CleanerML)
+        self.assertTrue(xmlcleaner.cleaner.is_usable())
+        self.assertEqual('测试标签', xmlcleaner.cleaner.options['opt'][0])
+        self.assertEqual('测试描述',
+                         xmlcleaner.cleaner.options['opt'][1])
+        commands = list(xmlcleaner.cleaner.get_commands('opt'))
+        self.assertEqual(0, len(commands))
+
+    def test_os_match(self):
+        """Unit test for os_match"""
+        xmlcleaner = CleanerML("doc/example_cleaner.xml")
+
+        # blank always matches
+        self.assertTrue(xmlcleaner.os_match(""))
+
+        # as Linux
+        self.assertFalse(xmlcleaner.os_match('windows', 'linux'))
+        self.assertTrue(xmlcleaner.os_match('linux', 'linux'))
+        self.assertTrue(xmlcleaner.os_match('unix', 'linux'))
+
+        # as Windows
+        self.assertFalse(xmlcleaner.os_match('linux', 'win32'))
+        self.assertFalse(xmlcleaner.os_match('unix', 'win32'))
+        self.assertTrue(xmlcleaner.os_match('windows', 'win32'))
+
+        # as unknown operating system
+        with self.assertRaises(RuntimeError):
+            xmlcleaner.os_match('linux', 'hal9000')
+
+    def test_pot_fragment(self):
+        """Unit test for pot_fragment()"""
+        self.assertIsString(pot_fragment("Foo", 'bar.xml'))
+
+    def test_var(self):
+        """Test the <var> element"""
+        xml_str = r"""
+<cleaner id="testvar">
+    <label>cleaner label</label>
+    <description>cleaner description</description>
+    <var name="basepath">
+        <value>%%LocalAppData%%\FooDoesNotExist</value>
+        <value>~/.config/FooDoesNotExist</value>
+        <value>{tempdir}/a</value>
+        <value>{tempdir}/b</value>
+    </var>
+    <option id="option1">
+        <label>option1 label</label>
+        <description>option1 description</description>
+        <action search="file" command="delete" path="$$basepath$$/test.log" />
+    </option>
+</cleaner>
+""".format(**{'tempdir': self.tempdir})
+        # write XML cleaner
+        cml_path = os.path.join(self.tempdir, 'test.xml')
+        self.write_file(cml_path, xml_str.encode(sys.getdefaultencoding()))
+
+        # create two canaries
+        test_log_path_a = os.path.join(self.tempdir, 'a', 'test.log')
+        test_log_path_b = os.path.join(self.tempdir, 'b', 'test.log')
+        common.touch_file(test_log_path_a)
+        common.touch_file(test_log_path_b)
+        self.assertExists(test_log_path_a)
+        self.assertExists(test_log_path_b)
+
+        # parse XML to XML cleaner instance
+        xmlc = CleanerML(cml_path)
+        self.assertIsInstance(xmlc, CleanerML)
+        self.assertIsInstance(xmlc.cleaner, Cleaner.Cleaner)
+        self.assertTrue(xmlc.cleaner.is_usable())
+
+        # run preview
+        self.run_all(xmlc, False)
+        self.assertExists(test_log_path_a)
+        self.assertExists(test_log_path_b)
+
+        # really delete
+        self.run_all(xmlc, True)
+        self.assertNotExists(test_log_path_a)
+        self.assertNotExists(test_log_path_b)

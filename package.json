@@ -1,0 +1,20 @@
+{
+  "name": "space-sweeper",
+  "version": "1.0.0",
+  "description": "一个极速的命令行工具，用于查找并清理开发者垃圾文件 (node_modules, target 等)",
+  "main": "index.js",
+  "type": "module",
+  "bin": {
+    "dtmpc": "./index.js"
+  },
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "ora": "^8.0.0",
+    "picocolors": "^1.0.0",
+    "prompts": "^2.4.2"
+  },
+  "author": "",
+  "license": "MIT"
+}
